@@ -16,4 +16,6 @@ Stage 1: python train.py -opt options/stage1.yml
 Stage 2: python train.py -opt options/stage2.yml
 ```
 # Inference
+```bash
 python test.py
+```

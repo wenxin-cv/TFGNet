@@ -2,7 +2,7 @@
 This repository contains a pytorch implementation for the paper: TFGNet: Target Face Generation from Low-Quality Images via Textual Guidance.
 # Dataset and Pre-trained Models
 ```bash
-Please download Training Dataset FFHQ [FFHQ Dataset](https://github.com/NVlabs/ffhq-dataset), then place it in the project root directory.
+Please download Training Dataset FFHQ ([FFHQ Dataset](https://github.com/NVlabs/ffhq-dataset)), then place it in the project root directory.
 Please download pre-trained …… ([Baidu Disk](), code: ), then place……
 ```
 # Environment

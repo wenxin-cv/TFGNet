@@ -1,0 +1,117 @@
+import cv2
+import copy
+import re
+import torch
+import numpy as np
+
+from pathlib import Path
+from models.facelib.detection.yolov5face.models.yolo import Model
+from models.facelib.detection.yolov5face.utils.datasets import letterbox
+from models.facelib.detection.yolov5face.utils.general import (
+    check_img_size,
+    non_max_suppression_face,
+    scale_coords,
+    scale_coords_landmarks,
+)
+
+
+IS_HIGH_VERSION = [int(m) for m in list(re.findall(r"^([0-9]+)\.([0-9]+)\.([0-9]+)([^0-9][a-zA-Z0-9]*)?(\+git.*)?$",\
+    torch.__version__)[0][:3])] >= [1, 9, 0]
+
+
+def isListempty(inList):
+    if isinstance(inList, list):
+        return all(map(isListempty, inList))
+    return False
+
+class YoloDetector:
+    def __init__(
+        self,
+        config_name,
+        min_face=10,
+        target_size=None,
+        device='cuda',
+    ):
+
+        self._class_path = Path(__file__).parent.absolute()
+        self.target_size = target_size
+        self.min_face = min_face
+        self.detector = Model(cfg=config_name)
+        self.device = device
+
+
+    def _preprocess(self, imgs):
+
+        pp_imgs = []
+        for img in imgs:
+            h0, w0 = img.shape[:2]  # orig hw
+            if self.target_size:
+                r = self.target_size / min(h0, w0)  # resize image to img_size
+                if r < 1:
+                    img = cv2.resize(img, (int(w0 * r), int(h0 * r)), interpolation=cv2.INTER_LINEAR)
+
+            imgsz = check_img_size(max(img.shape[:2]), s=self.detector.stride.max())  # check img_size
+            img = letterbox(img, new_shape=imgsz)[0]
+            pp_imgs.append(img)
+        pp_imgs = np.array(pp_imgs)
+        pp_imgs = pp_imgs.transpose(0, 3, 1, 2)
+        pp_imgs = torch.from_numpy(pp_imgs).to(self.device)
+        pp_imgs = pp_imgs.float()
+        return pp_imgs / 255.0
+
+    def _postprocess(self, imgs, origimgs, pred, conf_thres, iou_thres):
+
+        bboxes = [[] for _ in range(len(origimgs))]
+        landmarks = [[] for _ in range(len(origimgs))]
+
+        pred = non_max_suppression_face(pred, conf_thres, iou_thres)
+
+        for image_id, origimg in enumerate(origimgs):
+            img_shape = origimg.shape
+            image_height, image_width = img_shape[:2]
+            gn = torch.tensor(img_shape)[[1, 0, 1, 0]]
+            gn_lks = torch.tensor(img_shape)[[1, 0, 1, 0, 1, 0, 1, 0, 1, 0]]
+            det = pred[image_id].cpu()
+            scale_coords(imgs[image_id].shape[1:], det[:, :4], img_shape).round()
+            scale_coords_landmarks(imgs[image_id].shape[1:], det[:, 5:15], img_shape).round()
+
+            for j in range(det.size()[0]):
+                box = (det[j, :4].view(1, 4) / gn).view(-1).tolist()
+                box = list(
+                    map(int, [box[0] * image_width, box[1] * image_height, box[2] * image_width, box[3] * image_height])
+                )
+                if box[3] - box[1] < self.min_face:
+                    continue
+                lm = (det[j, 5:15].view(1, 10) / gn_lks).view(-1).tolist()
+                lm = list(map(int, [i * image_width if j % 2 == 0 else i * image_height for j, i in enumerate(lm)]))
+                lm = [lm[i : i + 2] for i in range(0, len(lm), 2)]
+                bboxes[image_id].append(box)
+                landmarks[image_id].append(lm)
+        return bboxes, landmarks
+
+    def detect_faces(self, imgs, conf_thres=0.7, iou_thres=0.5):
+        images = imgs if isinstance(imgs, list) else [imgs]
+        images = [cv2.cvtColor(img, cv2.COLOR_BGR2RGB) for img in images]
+        origimgs = copy.deepcopy(images)
+
+        images = self._preprocess(images)
+        
+        if IS_HIGH_VERSION:
+            with torch.inference_mode():
+                pred = self.detector(images)[0]
+        else:
+            with torch.no_grad():
+                pred = self.detector(images)[0]
+
+        bboxes, points = self._postprocess(images, origimgs, pred, conf_thres, iou_thres)
+
+        if not isListempty(points):
+            bboxes = np.array(bboxes).reshape(-1,4)
+            points = np.array(points).reshape(-1,10)
+            padding = bboxes[:,0].reshape(-1,1)
+            return np.concatenate((bboxes, padding, points), axis=1)
+        else:
+            return None
+
+    def __call__(self, *args):
+        return self.predict(*args)
